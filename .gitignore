@@ -1,6 +1,7 @@
 # other files
 llm_annotation_ft/
 wandb/
+artifacts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
