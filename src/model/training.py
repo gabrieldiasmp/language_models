@@ -204,7 +204,7 @@ class LightningModel(LightningModule):
         )
         return optimizer
 
-class HFLightningModel(LightningModule):
+class HFLightningModel(LightningModel):
     def __init__(
         self,
         model: torch.nn.Module,
@@ -223,7 +223,7 @@ class HFLightningModel(LightningModule):
             num_classes: Number of classes.
             task_type: "sequence_classification" or "token_classification".
         """
-        super().__init__()
+        super().__init__(model, learning_rate, num_classes)
         self.model = model
         self.label_name = label_name
         self.learning_rate = learning_rate
@@ -282,13 +282,124 @@ class HFLightningModel(LightningModule):
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
 
+
+class FlexibleLightningModel(LightningModule):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        learning_rate: float,
+        num_classes: int = None,
+        label_name: str = "labels",
+        task_type: str = "sequence_classification",  # or "token_classification"
+    ):
+        """
+        Flexible Lightning model for sequence or token classification.
+
+        Args:
+            model: PyTorch or HuggingFace model.
+            learning_rate: Learning rate for optimizer.
+            num_classes: Number of classes (required for metrics).
+            label_name: Key name for labels in batch.
+            task_type: "sequence_classification" or "token_classification".
+        """
+        super().__init__()
+        self.save_hyperparameters(ignore=["model"])
+        self.model = model
+        self.learning_rate = learning_rate
+        self.num_classes = num_classes
+        self.label_name = label_name
+        self.task_type = task_type
+
+        if num_classes is not None:
+            self._init_metrics(num_classes)
+        else:
+            self.train_acc = None
+            self.val_acc = None
+            self.test_acc = None
+
+    def _init_metrics(self, num_classes):
+        """Initialize metrics for both task types."""
+        task = "binary" if num_classes == 2 else "multiclass"
+        ignore_index = -100 if self.task_type == "token_classification" else None
+
+        self.train_acc = torchmetrics.Accuracy(task=task, num_classes=num_classes, ignore_index=ignore_index)
+        self.val_acc = torchmetrics.Accuracy(task=task, num_classes=num_classes, ignore_index=ignore_index)
+        self.test_acc = torchmetrics.Accuracy(task=task, num_classes=num_classes, ignore_index=ignore_index)
+
+        # Per-class metrics
+        self.val_precision = torchmetrics.Precision(task=task, num_classes=num_classes, average="none", ignore_index=ignore_index)
+        self.val_recall = torchmetrics.Recall(task=task, num_classes=num_classes, average="none", ignore_index=ignore_index)
+        self.val_f1 = torchmetrics.F1Score(task=task, num_classes=num_classes, average="none", ignore_index=ignore_index)
+
+    def forward(self, batch):
+        """Forward pass."""
+        return self.model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+        )
+
+    def _shared_step(self, batch):
+        """Shared logic for training, validation, and testing."""
+        labels = batch[self.label_name]
+        outputs = self(batch)
+        logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+
+        if self.task_type == "sequence_classification":
+            if logits.shape[1] != self.num_classes:
+                raise ValueError(f"Model output dimension ({logits.shape[1]}) doesn't match num_classes ({self.num_classes})")
+            loss = F.cross_entropy(logits, labels)
+            predicted_labels = torch.argmax(logits, dim=1)
+
+        elif self.task_type == "token_classification":
+            if logits.shape[2] != self.num_classes:
+                raise ValueError(f"Model output dimension ({logits.shape[2]}) doesn't match num_classes ({self.num_classes})")
+            loss = F.cross_entropy(logits.view(-1, self.num_classes), labels.view(-1), ignore_index=-100)
+            predicted_labels = torch.argmax(logits, dim=-1)
+
+        else:
+            raise ValueError(f"Unsupported task_type: {self.task_type}")
+
+        return loss, labels, predicted_labels
+
+    def training_step(self, batch, batch_idx):
+        loss, labels, preds = self._shared_step(batch)
+        self.log("train_loss", loss, prog_bar=True)
+        if self.train_acc is not None:
+            self.train_acc(preds, labels)
+            self.log("train_acc", self.train_acc, prog_bar=True, on_epoch=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, labels, preds = self._shared_step(batch)
+        self.log("val_loss", loss, prog_bar=True)
+
+        # Log per-class metrics
+        f1 = self.val_f1(preds, labels)
+        precision = self.val_precision(preds, labels)
+        recall = self.val_recall(preds, labels)
+
+        for class_idx in range(self.num_classes):
+            self.log(f"val_f1_class_{class_idx}", f1[class_idx])
+            self.log(f"val_precision_class_{class_idx}", precision[class_idx])
+            self.log(f"val_recall_class_{class_idx}", recall[class_idx])
+
+        return {"loss": loss, "preds": preds, "labels": labels}
+
+    def test_step(self, batch, batch_idx):
+        loss, labels, preds = self._shared_step(batch)
+        if self.test_acc is not None:
+            self.test_acc(preds, labels)
+            self.log("test_acc", self.test_acc)
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
+
+
 def train_model_lightning(
-    lightning_model: LightningModule,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
     group: str,
     project_name: str,
-    logger: Logger | None = None,
+    metric_to_monitor: str = "val_acc",
+    mode: str = "max",
     max_epochs: int = 30,
 ) -> Trainer:
     """Trains a PyTorch model using PyTorch Lightning.
@@ -317,8 +428,8 @@ def train_model_lightning(
     callbacks = [
         ModelCheckpoint(
             save_top_k=1,
-            mode="max",
-            monitor="val_acc",
+            mode=mode,
+            monitor=metric_to_monitor,
             save_last=True,
         )
     ]
@@ -331,11 +442,5 @@ def train_model_lightning(
         deterministic=True,
         gradient_clip_val=1.0  # Enable gradient clippin
     )
-
-    # trainer.fit(
-    #     model=lightning_model,
-    #     train_dataloaders=train_loader,
-    #     val_dataloaders=val_loader,
-    # )
 
     return trainer

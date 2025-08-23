@@ -2,6 +2,7 @@
 llm_annotation_ft/
 wandb/
 artifacts/
+ner_fine_tuning/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
