@@ -204,37 +204,83 @@ class LightningModel(LightningModule):
         )
         return optimizer
 
+class HFLightningModel(LightningModule):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        label_name: str = "labels",
+        learning_rate: float = 5e-5,
+        num_classes: int = None,
+        task_type: str = "sequence_classification"  # "sequence_classification" or "token_classification"
+    ):
+        """
+        Flexible Lightning module for sequence or token classification.
 
-class HFLightningModel(LightningModel):
-
-    def __init__(self, model: torch.nn.Module, label_name: str, learning_rate: float, num_classes: int = None):
-        super().__init__(model, learning_rate, num_classes)
+        Args:
+            model: Pretrained HuggingFace model.
+            label_name: Name of the label key in the batch.
+            learning_rate: Learning rate for optimizer.
+            num_classes: Number of classes.
+            task_type: "sequence_classification" or "token_classification".
+        """
+        super().__init__()
+        self.model = model
         self.label_name = label_name
+        self.learning_rate = learning_rate
+        self.num_classes = num_classes
+        self.task_type = task_type
 
     def forward(self, batch):
         return self.model(
-            batch["input_ids"],
+            input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
         )
-    
+
     def _shared_step(self, batch):
         labels = batch[self.label_name]
-
         outputs = self(batch)
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
 
-        # Validate logits dimensions
-        if logits.shape[1] != self.num_classes:
-            raise ValueError(f"Model output dimension ({logits.shape[1]}) doesn't match num_classes ({self.num_classes})")
-        
-        # Validate label range
-        if labels.max() >= self.num_classes or labels.min() < 0:
-            raise ValueError(f"Labels contain values outside valid range [0, {self.num_classes-1}]. "
-                           f"Found min: {labels.min()}, max: {labels.max()}")
+        if self.task_type == "sequence_classification":
+            # Sequence classification: [batch_size, num_classes]
+            if logits.shape[1] != self.num_classes:
+                raise ValueError(
+                    f"Model output dimension ({logits.shape[1]}) doesn't match num_classes ({self.num_classes})"
+                )
+            loss = F.cross_entropy(logits, labels)
+            predicted_labels = torch.argmax(logits, dim=1)
 
-        loss = F.cross_entropy(logits, labels)
-        predicted_labels = torch.argmax(logits, dim=1)
+        elif self.task_type == "token_classification":
+            # Token classification: [batch_size, seq_len, num_classes]
+            if logits.shape[2] != self.num_classes:
+                raise ValueError(
+                    f"Model output dimension ({logits.shape[2]}) doesn't match num_classes ({self.num_classes})"
+                )
+            # Flatten batch and seq_len for loss
+            loss = F.cross_entropy(
+                logits.view(-1, self.num_classes),
+                labels.view(-1),
+                ignore_index=-100  # ignore special tokens
+            )
+            predicted_labels = torch.argmax(logits, dim=-1)
+
+        else:
+            raise ValueError(f"Unsupported task_type: {self.task_type}")
+
         return loss, labels, predicted_labels
+
+    def training_step(self, batch, batch_idx):
+        loss, labels, preds = self._shared_step(batch)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, labels, preds = self._shared_step(batch)
+        self.log("val_loss", loss, prog_bar=True)
+        return {"loss": loss, "preds": preds, "labels": labels}
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
 
 def train_model_lightning(
     lightning_model: LightningModule,
