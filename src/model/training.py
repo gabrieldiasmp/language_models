@@ -34,51 +34,6 @@ def compute_accuracy(model: torch.nn.Module, dataloader: DataLoader) -> float:
     return correct / total_examples
 
 
-def train_model_vanilla(
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    num_epochs: int,
-) -> tuple[list[float], list[float], list[float]]:
-    """Trains a PyTorch model on a dataset, vanilla style."""
-
-    # Define some parameters. These could be parameters to the function.
-    LEARNING_RATE = 0.05
-    LOGGING_BATCHES_FREQUENCY = 250
-
-    # Get an optimizer.
-    optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
-
-    # Define lists to store loss and accuracies.
-    loss_list, train_acc_list, val_acc_list = [], [], []
-    for epoch in range(num_epochs):
-        model = model.train()
-        for batch_idx, (features, labels) in enumerate(train_loader):
-            logits = model(features)
-
-            loss = F.cross_entropy(logits, labels)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            if not batch_idx % LOGGING_BATCHES_FREQUENCY:
-                print(
-                    f"Epoch: {epoch+1:03d}/{num_epochs:03d}"
-                    f" | Batch {batch_idx:03d}/{len(train_loader):03d}"
-                    f" | Train Loss: {loss:.2f}"
-                )
-            loss_list.append(loss.item())
-
-        train_acc = compute_accuracy(model, train_loader)
-        val_acc = compute_accuracy(model, val_loader)
-        print(f"Train Acc.: {train_acc*100:.2f}% | Val. Acc.: {val_acc*100:.2f}%")
-        train_acc_list.append(train_acc)
-        val_acc_list.append(val_acc)
-
-    return loss_list, train_acc_list, val_acc_list
-
-
 class LightningModel(LightningModule):
     def __init__(self, model: torch.nn.Module, learning_rate: float, num_classes: int = None):
         """Initializes the LightningModel.
@@ -340,56 +295,70 @@ class FlexibleLightningModel(LightningModule):
 
     def _shared_step(self, batch):
         """Shared logic for training, validation, and testing."""
-        labels = batch[self.label_name]
+        labels = batch.get(self.label_name, None)  # labels may be absent during predict
         outputs = self(batch)
         logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
 
         if self.task_type == "sequence_classification":
             if logits.shape[1] != self.num_classes:
                 raise ValueError(f"Model output dimension ({logits.shape[1]}) doesn't match num_classes ({self.num_classes})")
-            loss = F.cross_entropy(logits, labels)
+            loss = F.cross_entropy(logits, labels) if labels is not None else None
             predicted_labels = torch.argmax(logits, dim=1)
 
         elif self.task_type == "token_classification":
             if logits.shape[2] != self.num_classes:
                 raise ValueError(f"Model output dimension ({logits.shape[2]}) doesn't match num_classes ({self.num_classes})")
-            loss = F.cross_entropy(logits.view(-1, self.num_classes), labels.view(-1), ignore_index=-100)
+            loss = F.cross_entropy(logits.view(-1, self.num_classes),
+                                   labels.view(-1),
+                                   ignore_index=-100) if labels is not None else None
             predicted_labels = torch.argmax(logits, dim=-1)
 
         else:
             raise ValueError(f"Unsupported task_type: {self.task_type}")
 
-        return loss, labels, predicted_labels
+        return loss, labels, predicted_labels, logits
 
     def training_step(self, batch, batch_idx):
-        loss, labels, preds = self._shared_step(batch)
+        loss, labels, preds, _ = self._shared_step(batch)
         self.log("train_loss", loss, prog_bar=True)
-        if self.train_acc is not None:
+        if labels is not None and self.train_acc is not None:
             self.train_acc(preds, labels)
             self.log("train_acc", self.train_acc, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, labels, preds = self._shared_step(batch)
+        loss, labels, preds, logits = self._shared_step(batch)
         self.log("val_loss", loss, prog_bar=True)
+        if labels is not None and self.val_acc is not None:
+            self.val_acc(preds, labels)
+            self.log("val_acc", self.val_acc, prog_bar=True, on_epoch=True)
 
-        # Log per-class metrics
-        f1 = self.val_f1(preds, labels)
-        precision = self.val_precision(preds, labels)
-        recall = self.val_recall(preds, labels)
+            # Per-class metrics
+            f1 = self.val_f1(preds, labels)
+            precision = self.val_precision(preds, labels)
+            recall = self.val_recall(preds, labels)
 
-        for class_idx in range(self.num_classes):
-            self.log(f"val_f1_class_{class_idx}", f1[class_idx])
-            self.log(f"val_precision_class_{class_idx}", precision[class_idx])
-            self.log(f"val_recall_class_{class_idx}", recall[class_idx])
+            for class_idx in range(self.num_classes):
+                if class_idx == 1:
+                    self.log(f"val_f1_class_{class_idx}", f1[class_idx], on_epoch=True, prog_bar=True)
+                else:
+                    self.log(f"val_f1_class_{class_idx}", f1[class_idx], on_epoch=True)
+                self.log(f"val_precision_class_{class_idx}", precision[class_idx], on_epoch=True)
+                self.log(f"val_recall_class_{class_idx}", recall[class_idx], on_epoch=True)
 
-        return {"loss": loss, "preds": preds, "labels": labels}
+        # Return logits + labels to allow post-hoc evaluation if needed
+        return {"loss": loss, "preds": preds, "labels": labels, "logits": logits}
 
-    def test_step(self, batch, batch_idx):
-        loss, labels, preds = self._shared_step(batch)
-        if self.test_acc is not None:
-            self.test_acc(preds, labels)
-            self.log("test_acc", self.test_acc)
+    def predict_step(self, batch, batch_idx):
+        """
+        Step for inference/predict.
+        Always returns logits (and labels if present).
+        """
+        _, labels, preds, logits = self._shared_step(batch)
+        out = {"logits": logits, "preds": preds}
+        if labels is not None:
+            out["labels"] = labels
+        return out
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
