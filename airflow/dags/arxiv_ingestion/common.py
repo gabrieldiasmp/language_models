@@ -3,7 +3,8 @@ import sys
 from functools import lru_cache
 from typing import Any, Tuple
 
-sys.path.insert(0, "/opt/airflow")
+# changed this line to add /app to the python path, as src is located at /app/src in the container
+sys.path.insert(0, "/app")
 
 from src.db.factory import make_database
 from src.services.arxiv.factory import make_arxiv_client
