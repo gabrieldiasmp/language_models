@@ -112,7 +112,7 @@ services:
     environment:
       # Airflow-specific environment setup
       - AIRFLOW_HOME=/opt/airflow
-      - PYTHONPATH=/opt/airflow/src
+      - PYTHONPATH=/opt/airflow:/opt/airflow/src
       # Container hostnames for Airflow
       - POSTGRES_DATABASE_URL=postgresql+psycopg2://rag_user:rag_password@postgres:5432/rag_db
       - OPENSEARCH_HOST=http://opensearch:9200

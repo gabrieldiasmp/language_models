@@ -1,10 +1,17 @@
 import logging
+import os
 import sys
 from functools import lru_cache
 from typing import Any, Tuple
 
-# changed this line to add /app to the python path, as src is located at /app/src in the container
-sys.path.insert(0, "/app")
+# Ensure the application source directory is importable when running inside different containers
+for project_root in ("/opt/airflow", "/app"):
+    src_dir = os.path.join(project_root, "src")
+    if os.path.isdir(src_dir):
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
 
 from src.db.factory import make_database
 from src.services.arxiv.factory import make_arxiv_client
