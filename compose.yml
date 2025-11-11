@@ -30,8 +30,29 @@ services:
       - REDIS__HOST=redis
     networks:
       - rag-network
-    volumes: # <--- added this section
-      - ./src:/app/src # Mount your local src directory into the container
+
+  # DBeaver (CloudBeaver) web UI for database management
+  dbeaver:
+    image: dbeaver/cloudbeaver:latest
+    container_name: rag-dbeaver
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - CB_SERVER_PORT=8978
+    ports:
+      - "8978:8978"
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8978 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - rag-network
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"] # <--- added this to enable auto-reloading on code changes
 
   redis:
@@ -253,6 +274,7 @@ volumes:
   langfuse_postgres_data:
   clickhouse_data:
   redis_data:
+  cloudbeaver_data:
 
 networks:
   rag-network:
