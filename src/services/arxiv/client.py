@@ -394,12 +394,27 @@ class ArxivClient:
             PDF URL or empty string (always HTTPS)
         """
         for link in entry.findall("atom:link", self.namespaces):
-            if link.get("type") == "application/pdf":
-                url = link.get("href", "")
-                # Convert HTTP to HTTPS for arXiv URLs
-                if url.startswith("http://arxiv.org/"):
-                    url = url.replace("http://arxiv.org/", "https://arxiv.org/")
-                return url
+            href = (link.get("href") or "").strip()
+            link_type = (link.get("type") or "").lower()
+            title = (link.get("title") or "").lower()
+            rel = (link.get("rel") or "").lower()
+
+            is_pdf_type = "application/pdf" in link_type if link_type else False
+            looks_like_pdf = title == "pdf" or "/pdf/" in href or rel == "related"
+
+            if href and (is_pdf_type or looks_like_pdf):
+                url = (
+                    href.replace("http://arxiv.org/", "https://arxiv.org/")
+                    .replace("http://export.arxiv.org/", "https://arxiv.org/")
+                )
+                if url.startswith("https://"):
+                    return url
+
+        # Fallback: construct canonical PDF URL if we recognized the ID
+        arxiv_id = self._get_arxiv_id(entry)
+        if arxiv_id:
+            return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
         return ""
 
     async def download_pdf(self, paper: ArxivPaper, force_download: bool = False) -> Optional[Path]:
