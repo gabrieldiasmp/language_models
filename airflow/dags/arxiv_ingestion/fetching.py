@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Dict, Any, List, Optional
 
 from .common import get_cached_services
 
@@ -116,6 +116,7 @@ async def run_historical_paper_ingestion_pipeline(
     )
 
     logger.info(f"Fetched {len(papers)} papers from arXiv")
+    total_papers = len(papers)
 
     if not papers:
         logger.warning("No papers found for the given criteria")
@@ -131,7 +132,47 @@ async def run_historical_paper_ingestion_pipeline(
     # Process PDFs if requested
     pdf_results = {}
     if process_pdfs:
-        pdf_results = await metadata_fetcher._process_pdfs_batch(papers)
+        # Track progress with a counter
+        progress_counter = {"parsed": 0}
+        
+        async def process_with_progress(paper, download_sem, parse_sem):
+            """Wrapper to track progress during PDF processing."""
+            result = await metadata_fetcher._download_and_parse_pipeline(paper, download_sem, parse_sem)
+            if result and isinstance(result, tuple) and result[1]:  # If parsed successfully
+                progress_counter["parsed"] += 1
+                logger.info(f"PDF processed: {progress_counter['parsed']}/{total_papers}")
+            return result
+        
+        # Process with progress tracking
+        download_semaphore = asyncio.Semaphore(metadata_fetcher.max_concurrent_downloads)
+        parse_semaphore = asyncio.Semaphore(metadata_fetcher.max_concurrent_parsing)
+        
+        pipeline_tasks = [process_with_progress(paper, download_semaphore, parse_semaphore) for paper in papers]
+        pipeline_results = await asyncio.gather(*pipeline_tasks, return_exceptions=True)
+        
+        # Convert results to the format expected by _store_papers_to_db
+        parsed_papers = {}
+        downloaded_count = 0
+        parsed_count = 0
+        errors = []
+        
+        for paper, result in zip(papers, pipeline_results):
+            if isinstance(result, Exception):
+                errors.append(f"Pipeline error for {paper.arxiv_id}: {str(result)}")
+            elif result and isinstance(result, tuple):
+                download_success, parsed_paper = result
+                if download_success:
+                    downloaded_count += 1
+                if parsed_paper:
+                    parsed_count += 1
+                    parsed_papers[paper.arxiv_id] = parsed_paper
+        
+        pdf_results = {
+            "downloaded": downloaded_count,
+            "parsed": parsed_count,
+            "parsed_papers": parsed_papers,
+            "errors": errors,
+        }
 
     # Store to database
     with database.get_session() as session:
