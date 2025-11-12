@@ -12,15 +12,34 @@ def generate_daily_report(**context):
 
     Collects statistics from all previous tasks and generates a summary report.
     """
-    logger.info("Generating daily ingestion report")
+    return generate_report_with_task_ids(
+        fetch_task_id="fetch_daily_papers",
+        index_task_id="index_papers_hybrid",
+        **context
+    )
+
+
+def generate_report_with_task_ids(
+    fetch_task_id: str = "fetch_daily_papers",
+    index_task_id: str = "index_papers_hybrid",
+    **context
+):
+    """Generate a report of the ingestion pipeline results with configurable task IDs.
+
+    Collects statistics from all previous tasks and generates a summary report.
+
+    :param fetch_task_id: Task ID for fetching papers (default: "fetch_daily_papers")
+    :param index_task_id: Task ID for indexing papers (default: "index_papers_hybrid")
+    """
+    logger.info("Generating ingestion report")
 
     ti = context.get("ti")
     if not ti:
         logger.warning("No task instance available, generating basic report")
         return {"status": "basic_report", "message": "No task instance for XCom data"}
 
-    fetch_stats = ti.xcom_pull(task_ids="fetch_daily_papers", key="fetch_results") or {}
-    hybrid_stats = ti.xcom_pull(task_ids="index_papers_hybrid", key="hybrid_index_stats") or {}
+    fetch_stats = ti.xcom_pull(task_ids=fetch_task_id, key="fetch_results") or {}
+    hybrid_stats = ti.xcom_pull(task_ids=index_task_id, key="hybrid_index_stats") or {}
 
     report = {
         "execution_date": context.get("execution_date", datetime.now()).isoformat(),

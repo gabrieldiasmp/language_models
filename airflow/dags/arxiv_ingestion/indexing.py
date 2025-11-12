@@ -45,6 +45,22 @@ def index_papers_hybrid(**context):
     3. Generates embeddings using Jina AI
     4. Indexes chunks with embeddings into OpenSearch
     """
+    return index_papers_hybrid_with_task_id(task_id="fetch_daily_papers", **context)
+
+
+def index_papers_hybrid_with_task_id(task_id: str = "fetch_daily_papers", **context):
+    """Index papers with chunking and vector embeddings for hybrid search.
+
+    This is a flexible version that accepts a task_id parameter to pull XCom data from different tasks.
+
+    This task:
+    1. Fetches recently processed papers from PostgreSQL
+    2. Chunks them into overlapping segments (600 words, 100 overlap)
+    3. Generates embeddings using Jina AI
+    4. Indexes chunks with embeddings into OpenSearch
+
+    :param task_id: Task ID to pull fetch results from (default: "fetch_daily_papers")
+    """
     try:
         database = make_database()
 
@@ -52,7 +68,7 @@ def index_papers_hybrid(**context):
 
         fetch_results = None
         if ti:
-            fetch_results = ti.xcom_pull(task_ids="fetch_daily_papers", key="fetch_results")
+            fetch_results = ti.xcom_pull(task_ids=task_id, key="fetch_results")
 
         with database.get_session() as session:
             from src.models.paper import Paper

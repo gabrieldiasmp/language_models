@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from .common import get_cached_services
 
@@ -67,6 +67,134 @@ def fetch_daily_papers(**context):
     logger.info(f"Daily fetch complete: {results['papers_fetched']} papers for {target_date}")
 
     results["date"] = target_date
+    ti = context.get("ti")
+    if ti:
+        ti.xcom_push(key="fetch_results", value=results)
+
+    return results
+
+
+async def run_historical_paper_ingestion_pipeline(
+    from_date: str,
+    to_date: str,
+    categories: List[str],
+    process_pdfs: bool = True,
+    max_results: Optional[int] = None,
+) -> dict:
+    """Async wrapper for historical paper ingestion pipeline with multiple categories.
+
+    :param from_date: Start date to fetch papers for (YYYYMMDD format)
+    :param to_date: End date to fetch papers for (YYYYMMDD format)
+    :param categories: List of arXiv categories to fetch (e.g., ["cs.AI", "stat.ML", "cs.LG"])
+    :param process_pdfs: Whether to download and process PDFs
+    :param max_results: Maximum number of papers to fetch (uses config default if None)
+    :returns: Dictionary with ingestion statistics
+    """
+    arxiv_client, _, database, metadata_fetcher, _ = get_cached_services()
+
+    if max_results is None:
+        max_results = arxiv_client.max_results
+
+    # Build search query with multiple categories
+    # Format: (cat:cs.AI OR cat:stat.ML OR cat:cs.LG) AND submittedDate:[YYYYMMDD0000 TO YYYYMMDD2359]
+    category_query = " OR ".join([f"cat:{cat}" for cat in categories])
+    
+    # Add date filtering
+    date_from = f"{from_date}0000"
+    date_to = f"{to_date}2359"
+    search_query = f"({category_query}) AND submittedDate:[{date_from}+TO+{date_to}]"
+
+    logger.info(f"Fetching historical papers with query: {search_query}")
+    logger.info(f"Categories: {categories}, Date range: {from_date} to {to_date}")
+
+    # Fetch papers using custom query
+    papers = await arxiv_client.fetch_papers_with_query(
+        search_query=search_query,
+        max_results=max_results,
+        sort_by="submittedDate",
+        sort_order="ascending",  # Use ascending for historical data
+    )
+
+    logger.info(f"Fetched {len(papers)} papers from arXiv")
+
+    if not papers:
+        logger.warning("No papers found for the given criteria")
+        return {
+            "papers_fetched": 0,
+            "pdfs_downloaded": 0,
+            "pdfs_parsed": 0,
+            "papers_stored": 0,
+            "errors": [],
+            "processing_time": 0,
+        }
+
+    # Process PDFs if requested
+    pdf_results = {}
+    if process_pdfs:
+        pdf_results = await metadata_fetcher._process_pdfs_batch(papers)
+
+    # Store to database
+    with database.get_session() as session:
+        stored_count = metadata_fetcher._store_papers_to_db(
+            papers=papers,
+            parsed_papers=pdf_results.get("parsed_papers", {}),
+            db_session=session,
+        )
+
+    results = {
+        "papers_fetched": len(papers),
+        "pdfs_downloaded": pdf_results.get("downloaded", 0) if process_pdfs else 0,
+        "pdfs_parsed": pdf_results.get("parsed", 0) if process_pdfs else 0,
+        "papers_stored": stored_count,
+        "errors": pdf_results.get("errors", []) if process_pdfs else [],
+        "processing_time": 0,  # Could add timing if needed
+    }
+
+    return results
+
+
+def fetch_historical_papers(
+    from_date: str,
+    to_date: str,
+    categories: List[str],
+    max_results: Optional[int] = None,
+    **context
+):
+    """Fetch historical papers from arXiv for a date range and multiple categories.
+
+    This task:
+    1. Fetches papers from arXiv API for the specified date range and categories
+    2. Downloads and processes PDFs using Docling
+    3. Stores metadata and parsed content in PostgreSQL
+
+    :param from_date: Start date (YYYYMMDD format)
+    :param to_date: End date (YYYYMMDD format)
+    :param categories: List of arXiv categories (e.g., ["cs.AI", "stat.ML", "cs.LG"])
+    :param max_results: Maximum number of papers to fetch (uses config default if None)
+    """
+    logger.info(f"Starting historical paper fetching task")
+    logger.info(f"Date range: {from_date} to {to_date}")
+    logger.info(f"Categories: {categories}")
+
+    results = asyncio.run(
+        run_historical_paper_ingestion_pipeline(
+            from_date=from_date,
+            to_date=to_date,
+            categories=categories,
+            process_pdfs=True,
+            max_results=max_results,
+        )
+    )
+
+    logger.info(
+        f"Historical fetch complete: {results['papers_fetched']} papers fetched, "
+        f"{results['papers_stored']} papers stored"
+    )
+
+    results["from_date"] = from_date
+    results["to_date"] = to_date
+    results["categories"] = categories
+    
     ti = context.get("ti")
     if ti:
         ti.xcom_push(key="fetch_results", value=results)
