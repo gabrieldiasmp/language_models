@@ -265,16 +265,62 @@ services:
     networks:
       - rag-network
 
-
 volumes:
   postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/postgres_data
+
   opensearch_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/opensearch_data
+
   ollama_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/ollama_data
+
   airflow_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/airflow_logs
+
   langfuse_postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/langfuse_postgres_data
+
   clickhouse_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/clickhouse_data
+
   redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/redis_data
+
   cloudbeaver_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker_volumes/cloudbeaver_data
 
 networks:
   rag-network:
