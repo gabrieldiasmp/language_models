@@ -3,6 +3,7 @@ llm_annotation_ft/
 wandb/
 artifacts/
 ner_fine_tuning/
+docker_data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
