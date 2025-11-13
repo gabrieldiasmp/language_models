@@ -8,6 +8,42 @@ from .common import get_cached_services
 logger = logging.getLogger(__name__)
 
 
+def _filter_unprocessed_papers_by_db(papers: List[Any]) -> List[Any]:
+    """Filter out papers that are already parsed/processed in PostgreSQL.
+
+    A paper is considered processed if its record exists with pdf_processed=True.
+    This avoids re-downloading and re-parsing PDFs unnecessarily.
+    """
+    try:
+        _arxiv_client, _pdf_parser, database, _metadata_fetcher, _opensearch_client = get_cached_services()
+
+        # Extract arxiv_ids from fetched metadata
+        arxiv_ids = [p.arxiv_id for p in papers if getattr(p, "arxiv_id", None)]
+        if not arxiv_ids:
+            return papers
+
+        with database.get_session() as session:
+            from sqlalchemy import select
+            from src.models.paper import Paper
+
+            # Find those already processed
+            stmt = select(Paper.arxiv_id).where(Paper.arxiv_id.in_(arxiv_ids), Paper.pdf_processed == True)
+            processed_ids = set(x[0] for x in session.execute(stmt).all())
+
+        if not processed_ids:
+            return papers
+
+        remaining = [p for p in papers if p.arxiv_id not in processed_ids]
+        logger.info(
+            f"Filtered already processed papers by DB: {len(processed_ids)} skipped, {len(remaining)}/{len(papers)} remaining"
+        )
+        return remaining
+    except Exception as e:
+        # Fail-open: if filtering fails, proceed with full list but log the issue
+        logger.warning(f"DB filter for processed papers failed, proceeding without filter: {e}")
+        return papers
+
+
 async def run_paper_ingestion_pipeline(
     target_date: str,
     process_pdfs: bool = True,
@@ -116,7 +152,20 @@ async def run_historical_paper_ingestion_pipeline(
     )
 
     logger.info(f"Fetched {len(papers)} papers from arXiv")
+
+    # Filter out papers already processed in DB to avoid re-work
+    papers = _filter_unprocessed_papers_by_db(papers)
     total_papers = len(papers)
+    if total_papers == 0:
+        logger.info("All fetched papers are already processed. Nothing to do.")
+        return {
+            "papers_fetched": 0,
+            "pdfs_downloaded": 0,
+            "pdfs_parsed": 0,
+            "papers_stored": 0,
+            "errors": [],
+            "processing_time": 0,
+        }
 
     if not papers:
         logger.warning("No papers found for the given criteria")
