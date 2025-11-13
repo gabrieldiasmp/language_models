@@ -40,7 +40,7 @@ def fetch_historical_papers_task(**context):
         from_date=HISTORICAL_FROM_DATE,
         to_date=HISTORICAL_TO_DATE,
         categories=HISTORICAL_CATEGORIES,
-        max_results=200,  # Limit for historical data processing
+        max_results=10,  # Limit for historical data processing
         **context
     )
 

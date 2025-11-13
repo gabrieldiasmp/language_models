@@ -43,7 +43,7 @@ services:
     ports:
       - "8978:8978"
     volumes:
-      - ./docker_data/cloudbeaver:/opt/cloudbeaver/workspace
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8978 || exit 1"]
       interval: 30s
@@ -61,7 +61,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - ./docker_data/redis:/data
+      - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -89,7 +89,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ./docker_data/opensearch:/usr/share/opensearch/data
+      - opensearch_data:/usr/share/opensearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
@@ -142,7 +142,7 @@ services:
       - REDIS__HOST=redis
     volumes:
       - ./airflow/dags:/opt/airflow/dags
-      - ./docker_data/airflow_logs:/opt/airflow/logs
+      - airflow_logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./src:/opt/airflow/src
     ports:
@@ -163,7 +163,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ./docker_data/ollama:/root/.ollama
+      - ollama_data:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -185,7 +185,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./docker_data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_db"]
       interval: 5s
@@ -206,7 +206,7 @@ services:
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
       - CLICKHOUSE_PASSWORD=langfuse
     volumes:
-      - ./docker_data/clickhouse:/var/lib/clickhouse
+      - clickhouse_data:/var/lib/clickhouse
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 30s
@@ -254,7 +254,7 @@ services:
       - POSTGRES_PASSWORD=langfuse
       - POSTGRES_HOST_AUTH_METHOD=password
     volumes:
-      - ./docker_data/langfuse_postgres:/var/lib/postgresql/data
+      - langfuse_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
       interval: 5s
@@ -267,7 +267,14 @@ services:
 
 
 volumes:
-  # Named volumes no longer used; persistence handled via bind mounts under /teamspace/studios/this_studio/docker_data
+  postgres_data:
+  opensearch_data:
+  ollama_data:
+  airflow_logs:
+  langfuse_postgres_data:
+  clickhouse_data:
+  redis_data:
+  cloudbeaver_data:
 
 networks:
   rag-network:
