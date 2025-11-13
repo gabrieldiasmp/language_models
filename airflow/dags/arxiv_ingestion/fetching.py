@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+import random
 
 from .common import get_cached_services
 
@@ -143,15 +144,21 @@ async def run_historical_paper_ingestion_pipeline(
     logger.info(f"Fetching historical papers with query: {search_query}")
     logger.info(f"Categories: {categories}, Date range: {from_date} to {to_date}")
 
-    # Fetch papers using custom query
+    # Fetch papers using custom query (request more, then sample for variability)
+    target_count = max_results
+    request_limit = min(2000, max(1, target_count * 5))
     papers = await arxiv_client.fetch_papers_with_query(
         search_query=search_query,
-        max_results=max_results,
+        max_results=request_limit,
         sort_by="submittedDate",
         sort_order="ascending",  # Use ascending for historical data
     )
 
-    logger.info(f"Fetched {len(papers)} papers from arXiv")
+    # Shuffle and sample down to target_count to vary selection across runs
+    random.shuffle(papers)
+    if len(papers) > target_count:
+        papers = papers[:target_count]
+    logger.info(f"Fetched {len(papers)} papers from arXiv (after shuffle/sample)")
 
     # Filter out papers already processed in DB to avoid re-work
     papers = _filter_unprocessed_papers_by_db(papers)
